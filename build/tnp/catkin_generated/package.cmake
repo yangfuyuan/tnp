@@ -1,0 +1,7 @@
+set(_CATKIN_CURRENT_PACKAGE "tnp")
+set(tnp_MAINTAINER "fotis balampanis <fbalampanis@gmail.com>")
+set(tnp_DEPRECATED "")
+set(tnp_VERSION "0.0.0")
+set(tnp_BUILD_DEPENDS "CGAL" "gmp" "roscpp" "visualization_msgs")
+set(tnp_RUN_DEPENDS "CGAL" "gmp" "roscpp" "visualization_msgs")
+set(tnp_BUILDTOOL_DEPENDS "catkin")
