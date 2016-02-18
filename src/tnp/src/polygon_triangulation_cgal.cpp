@@ -321,34 +321,27 @@ double longitudeDisplacement(double initialLongitude, double displacedLatitude, 
 
 }
 
-int main( int argc, char** argv )
-{
+void path_output(double longitude, double latitude, int which_agent, nav_msgs::Path& path){
+
     // einai lathos. den mporeis na ksereis to simeio 0.0.
     // ksereis mono ta simeia toy sximatos
     // i arxiki topothesia toy 0.0
-    double initialLatitude = 12.1;
-    double initialLongitude = 12.1;
-
-    // placeholders
-    int which_agent = 1;
-    int numberOfStep = 1;
+    double initialLongitude = longitude;
+    double initialLatitude = latitude;
 
     // ta, x kai y tou centroid
-    double pointY = 12.2;
-    double pointX = 14.4;
+    double pointY = 0.0;
+    double pointX = 0.0;
+    // placeholders
+    int numberOfStep = 1;
 
-    // ta x,y kathe waypoint
-    double newLatitude = latitudeDisplacement(initialLatitude, pointY);
-    double newLongitude = longitudeDisplacement(initialLongitude, newLatitude, pointX);
-
-    // kai kanta oti thes
-    //---------------FILES----------------pane prin apo toys ipologismous//
-
+    // ---------- LOGS AND WPFILES -------------//
     std::stringstream coordinates_filename;
     std::stringstream flightplan_filename;
+    std::string data_path = "/home/fotis/Dev/Data/";
 
-    coordinates_filename << currentDateTime() << ":forAgent:" << which_agent << ":coordinates" << ".txt";
-    flightplan_filename << currentDateTime() << ":forAgent:" << which_agent << ":wpPlan" << ".txt";
+    coordinates_filename << data_path << currentDateTime() << ":forAgent:" << which_agent << ":coordinates" << ".txt";
+    flightplan_filename << data_path << currentDateTime() << ":forAgent:" << which_agent << ":wpPlan" << ".txt";
     const std::string& tmp1 = coordinates_filename.str();
     const std::string& tmp2 = flightplan_filename.str();
     // see http://stackoverflow.com/questions/1374468/stringstream-string-and-char-conversion-confusion
@@ -357,12 +350,11 @@ int main( int argc, char** argv )
     std::ofstream fPlanDataCoordinates(cstr1);
     std::ofstream fWPPlan(cstr2);
 
-
     fPlanDataCoordinates << "'UAVID', 'WptID', 'Lat', 'Lon',"<< std::endl; // only at first line
     fPlanDataCoordinates << which_agent << ", ";
     fPlanDataCoordinates << numberOfStep /* or id of cell.. */ << ", ";
-    fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLatitude << ", ";
-    fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLongitude << std::endl;
+    fPlanDataCoordinates << std::fixed << std::setprecision(7) << initialLatitude << ", ";
+    fPlanDataCoordinates << std::fixed << std::setprecision(7) << initialLongitude << std::endl;
 
     // the following is the initial take off position - this is the initial 0.0 of the agent but for
     // now not the initial position (the one where the triangulation is counted).
@@ -370,21 +362,53 @@ int main( int argc, char** argv )
     fWPPlan << "0\t1\t0\t16\t0\t0\t0\t0\t" << std::fixed << std::setprecision(7) << initialLatitude << "\t"
                 << std::fixed <<  std::setprecision(7) << initialLongitude << "\t585\t1" << std::endl;
 
-    // this is the initial (where the agent should start...):
-    fWPPlan << "1\t0\t3\t22\t15\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
-            << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
-    // this is for every other spot:
-    fWPPlan << numberOfStep << "\t0\t3\t16\t0\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
-            << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
+    bool initial = true;
+
+    for (std::vector<geometry_msgs::PoseStamped>::iterator it = path.poses.begin();
+            it != path.poses.end(); it++){
+
+        pointX = it->pose.position.x;
+        pointY = it->pose.position.y;// in the end remove *it from the path (why, the iterator will be at the end..)
+
+        // ta x,y kathe waypoint
+        double newLatitude = latitudeDisplacement(initialLatitude, pointY);
+        double newLongitude = longitudeDisplacement(initialLongitude, newLatitude, pointX);
+
+        // kai kanta oti thes
+        //---------------FILES----------------pane prin apo toys ipologismous//
+
+        if (initial){
+
+            fWPPlan << "1\t0\t3\t22\t15\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
+                    << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
+             initial = false;
+
+        } else {
+
+            fPlanDataCoordinates << which_agent << ", ";
+            fPlanDataCoordinates << numberOfStep /* or id of cell.. */ << ", ";
+            fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLatitude << ", ";
+            fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLongitude << std::endl;
+
+            fWPPlan << numberOfStep << "\t0\t3\t16\t0\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
+                    << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
+        }
+
+        numberOfStep++;
+    }
+
     // and this for landing:
     fWPPlan << numberOfStep << "\t0\t3\t21\t480\t0\t0\t25\t" << std::fixed << std::setprecision(7) << initialLatitude << "\t"
             << std::fixed << std::setprecision(7) << initialLongitude  << "\t580\t1" << std::endl;
-
     // otan ola exoun mpei
     fPlanDataCoordinates.close();
     fWPPlan.close();
 
+    //-----------END OF LOGS AND WPFILES  --------//
+}
 
+int main( int argc, char** argv )
+{
   // --------- CGAL CODE ----------------------
   // create a vector of kernel_points that are the edges of the polygon
   std::vector<kernel_Point_2> polygon_edges;
@@ -707,6 +731,15 @@ int main( int argc, char** argv )
     }
   }
 
+  // now you have the path, initialize the files, produce the files
+  // the next lat long is the initial testing location for ardupilot
+  double testingLong = 23.344423;
+  double testingLat = 45.234554;
+  // the file generation function
+  path_output(testingLong, testingLat, for_agent, path);
+  std::cout << "Number of waypoints: " << path.poses.size() << std::endl;
+
+  // ------------- rviz coloring schema ----------------//
   for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin(); faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
       
     color_iterator += 1.0;
