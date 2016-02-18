@@ -14,6 +14,9 @@
 #include <CGAL/Delaunay_mesh_face_base_2.h>
 #include <CGAL/Delaunay_mesh_size_criteria_2.h>
 
+#include "utilities.h"
+#include "polygon_triangulation.h"
+
 #include <iostream> 
 #include <vector>
 #include <cmath>
@@ -21,129 +24,22 @@
 #include <functional>
 #include <cassert>
 #include <list>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <ctime>
 
-// each face has some info..
-struct FaceInfo2
-{
-  FaceInfo2(){}
+// Get current date/time, format is YYYY-MM-DD.HH:mm:ss
+const std::string currentDateTime() {
+    time_t     now = time(0);
+    struct tm  tstruct;
+    char       buf[80];
+    tstruct = *localtime(&now);
+    // Visit http://en.cppreference.com/w/cpp/chrono/c/strftime
+    // for more information about date/time format
+    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
 
-  bool visited, numbered, path_visited;
-  int id, depth, agent_id, jumps_agent_id;
-
-  void initialize(int face_id){
-    visited = numbered = path_visited = false;
-    depth = 0;
-    id = face_id;
-  }
-
-  bool is_visited(){
-    return visited;
-  }
-  bool has_number(){
-    return numbered;
-  }
-  //int nesting_level;
-  // bool in_domain(){ 
-  //   return nesting_level%2 == 1;
-  // }
-};
-
-
-// the cartesian Kernel
-typedef CGAL::Simple_cartesian<double> Kernel;
-typedef Kernel::Point_2 kernel_Point_2;
-typedef Kernel::Segment_2 Segment_2;
-
-// the constructions Kernel
-typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
-typedef CGAL::Triangulation_vertex_base_2<K> Vb;
-
-// -- Inserting additional info in every face
-typedef CGAL::Delaunay_mesh_face_base_2<K> Fb;
-
-typedef CGAL::Constrained_triangulation_face_base_2<K,Fb>        CTFb;
-typedef CGAL::Triangulation_face_base_with_info_2<FaceInfo2,K,CTFb>    InfoFbb;
-
-typedef CGAL::Triangulation_data_structure_2<Vb, InfoFbb> Tds;
-// new
-typedef CGAL::Exact_predicates_tag Itag;
-typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds, Itag> CDT;
-typedef CGAL::Delaunay_mesh_size_criteria_2<CDT> Criteria;
-typedef CGAL::Delaunay_mesher_2<CDT, Criteria> Mesher;
-
-// The triangulation points
-typedef CDT::Vertex_handle Vertex_handle;
-typedef CDT::Point triangulation_Point;
-
-// custom types
-typedef std::pair<CDT::Face_handle ,float> Distance_Entry;
-typedef std::vector<Distance_Entry> Distance_Vector;
-typedef std::vector<int> Path_visited_faces_by_id;
-
-geometry_msgs::PoseStamped build_pose_stamped(geometry_msgs::Point point_position){
-
-  geometry_msgs::Pose pose;
-  pose.position = point_position;
-  pose.orientation.w = 0.0;
-
-  geometry_msgs::PoseStamped pose_stamped;
-  pose_stamped.pose = pose;
-  pose_stamped.header.frame_id = "/my_frame";
-  pose_stamped.header.stamp = ros::Time::now();
-
-  return pose_stamped;
-
-}
-
-geometry_msgs::Point cgal_triangulation_point_to_ros_geometry_point(triangulation_Point cgal_point, float elevation) {
-
-  geometry_msgs::Point ros_point;
-  ros_point.x = cgal_point.x();
-  ros_point.y = cgal_point.y();
-  ros_point.z = elevation;    
-
-  return ros_point;
-}
-
-geometry_msgs::Point cgal_point_to_ros_geometry_point(kernel_Point_2 cgal_point) {
-
-  geometry_msgs::Point ros_point;
-  ros_point.x = cgal_point.x();
-  ros_point.y = cgal_point.y();
-  ros_point.z = 0.0;    
-
-  return ros_point;
-}
-
-geometry_msgs::Point32 point_to_point_32(geometry_msgs::Point point) {
-
-  geometry_msgs::Point32 point32;
-  point32.x = point.x;
-  point32.y = point.y;
-  point32.z = point.z;
-
-  return point32;
-}
-
-geometry_msgs::Point face_points_to_center(triangulation_Point point1, triangulation_Point point2, triangulation_Point point3){
-
-  geometry_msgs::Point center;
-  center.x =  ( (point1.x() + point2.x() + point3.x()) / 3);
-  center.y =  ( (point1.y() + point2.y() + point3.y()) / 3);
-  center.z = 0;
-
-  return center;
-}
-
-geometry_msgs::Point face_to_center(CDT& cdt, CDT::Face_handle face){
-
-  // create a point for each of the edges of the face.
-  triangulation_Point point1 = cdt.triangle(face)[0];
-  triangulation_Point point2 = cdt.triangle(face)[1];
-  triangulation_Point point3 = cdt.triangle(face)[2];
-
-  return face_points_to_center(point1, point2, point3);
-
+    return buf;
 }
 
 float calculate_distance(geometry_msgs::Point center1, geometry_msgs::Point center2){
@@ -155,12 +51,11 @@ float calculate_distance(geometry_msgs::Point center1, geometry_msgs::Point cent
 bool distance_comparison (const Distance_Entry& i, const Distance_Entry& j) { 
   if (i.first != j.first)
     return (i.second < j.second);   
-  //return (i.first->info().depth < j.first->info().depth);
-  //return (i.second < j.second); 
-    //return (i.second < j.second); 
 }
 
-bool depth_comparison  (const Distance_Entry& i, const Distance_Entry& j) { return (i.first->info().depth < j.first->info().depth); }
+bool depth_comparison  (const Distance_Entry& i, const Distance_Entry& j) {
+    return (i.first->info().depth < j.first->info().depth);
+}
 
 void shortest_path_coverage(CDT& cdt, nav_msgs::Path& path, CDT::Face_handle& starter_face, int agent, int target_face_id){
 
@@ -223,72 +118,70 @@ void shortest_path_coverage(CDT& cdt, nav_msgs::Path& path, CDT::Face_handle& st
 
 void complete_path_coverage(CDT& cdt, nav_msgs::Path& path, CDT::Face_handle& starter_face, int agent){
 
-  CDT::Face_handle& current_face = starter_face;
+    CDT::Face_handle& starter_cell = starter_face;
+    Face_Handle_Vector borders_vector;
+    Distance_Vector borders_distance_vector;
+    int current_depth = 999;
+    int smallest_depth = 999;
+    bool not_finished = true;
+    bool initial = true;
 
-  Path_visited_faces_by_id path_visited_faces_by_id_vector;
-  path_visited_faces_by_id_vector.push_back(starter_face->info().id);
+    starter_cell->info().path_visited = true;
+    path.poses.push_back(build_pose_stamped(face_to_center(cdt, starter_cell)));
 
-  Distance_Vector distance_vector;  
+    do {
 
-  int depth = 2;
-  int greatest_depth = 3;
+        not_finished = false;
 
-  bool face_found = false;
-  bool initial_run = true;
+        // go through all triangles, get the starter cell and the borders vector
+        for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin();
+            faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
 
-  do{
-    for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin(); faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
+            if ( (faces_iterator->info().coverage_depth >= current_depth)
+                 && (faces_iterator->info().agent_id == agent)
+                 && (!faces_iterator->info().is_path_visited())) {
 
-      CDT::Face_handle next_face = faces_iterator;
+                borders_vector.push_back(faces_iterator);
+                not_finished = true;
+            }
 
-      if ( (next_face->is_in_domain()) && (next_face->info().agent_id == agent) ){
-
-        if (initial_run == true){
-          if (greatest_depth < next_face->info().depth){    
-            greatest_depth = next_face->info().depth; 
-          }
+            if (initial){
+                if (faces_iterator->info().coverage_depth < smallest_depth){
+                    smallest_depth = faces_iterator->info().coverage_depth;
+                }
+            }
         }
 
-        // create a vector that calculates the distance of each face of the same depth with the previous step.  
-        //if (  (next_face->info().depth <= depth) && 
-        if ((!( std::find(path_visited_faces_by_id_vector.begin(), path_visited_faces_by_id_vector.end(), 
-            (next_face->info().id) ) != path_visited_faces_by_id_vector.end())) ) {
-        // (next_face->info().path_visited == false)){
-          
-          face_found = true;      
-          float this_distance = calculate_distance(face_to_center(cdt, next_face), face_to_center(cdt, current_face));
-          //Distance_Entry this_entry = std::make_pair(current_face->info().id, this_distance);
-          Distance_Entry this_entry = std::make_pair(next_face, this_distance);
-          distance_vector.push_back(this_entry);      
-          
-        } 
-      }
-    }
+        initial = false;
 
-    initial_run = false;
-    
-    if (face_found){
-      // sort it by distance
-      std::sort(distance_vector.begin(), distance_vector.end(), distance_comparison);
-      // put the nearer to path
-      CDT::Face_handle& path_face = distance_vector.front().first;
-      // put it in the path
-      path.poses.push_back(build_pose_stamped(face_to_center(cdt, path_face)));  
-      // note it as path visited -- TODO make it with pointers.
-      path_face->info().path_visited = true;
-      // TODO until then we use a dummy list. should be done better.
-      path_visited_faces_by_id_vector.push_back(path_face->info().id);
+        if (!not_finished){
+            current_depth = current_depth - 10;
+        } else {
 
-      current_face = path_face;
-      face_found = false;
-    } else {
-      depth++;
-    }
+            // calculate the distance from all borders to the starter cell in order to choose the first border cell to visit
+            for (std::vector<CDT::Face_handle>::iterator it = borders_vector.begin(); it != borders_vector.end(); it++){
+                float this_distance = calculate_distance(face_to_center(cdt, *it),face_to_center(cdt, starter_cell));
+                Distance_Entry this_entry = std::make_pair(*it, this_distance);
+                borders_distance_vector.push_back(this_entry);
+            }
 
-    distance_vector.clear();
+            std::sort(borders_distance_vector.begin(), borders_distance_vector.end(), distance_comparison);
+            // and this is the closest
+            CDT::Face_handle& first_of_the_border = borders_distance_vector.front().first;
 
-  }while (depth <= greatest_depth);
-  std::cout << " ENDED " << depth << std::endl;
+            // an o geitonas tou starter_cell, diladi toy proigoymenoy vimatos, pou einai pio konta
+            // ston first of the border, den exei ton firstOfTHeBor ws geitona,
+            // tote vale ayton ton geitona sto path, kanton visited an den einai,
+            // valton ws starter cell kai epanelave
+
+            path.poses.push_back(build_pose_stamped(face_to_center(cdt, first_of_the_border)));
+            first_of_the_border->info().path_visited = true;
+            starter_cell = first_of_the_border;
+        }
+        borders_vector.clear();
+        borders_distance_vector.clear();
+    } while (current_depth > smallest_depth);
+    // TODO: prepei na to kanoyme na min pidaei...
 }
 
 // create the initial CGAL triangulation polygon
@@ -296,29 +189,27 @@ void make_triangulation(CDT& cdt, std::vector<kernel_Point_2>& polygon_edges){
 
 // ------------------ JUST A SQUARE - NOTHING TO SEE HERE, MOVE ALONG ----------
 
-  // Vertex_handle va = cdt.insert(triangulation_Point(10,10));
-  // Vertex_handle vb = cdt.insert(triangulation_Point(350,10));
-  // cdt.insert_constraint(va,vb);
-  // polygon_edges.push_back(kernel_Point_2(10,10));
-  // polygon_edges.push_back(kernel_Point_2(350,10));
+//   Vertex_handle va = cdt.insert(triangulation_Point(10,10));
+//   Vertex_handle vb = cdt.insert(triangulation_Point(350,10));
+//   cdt.insert_constraint(va,vb);
+//   polygon_edges.push_back(kernel_Point_2(10,10));
+//   polygon_edges.push_back(kernel_Point_2(350,10));
 
-  // va = vb;
-  // vb = cdt.insert(triangulation_Point(350,350));
-  // cdt.insert_constraint(va,vb);
-  // polygon_edges.push_back(kernel_Point_2(350,350));
+//   va = vb;
+//   vb = cdt.insert(triangulation_Point(350,350));
+//   cdt.insert_constraint(va,vb);
+//   polygon_edges.push_back(kernel_Point_2(350,350));
 
-  // va = vb;
-  // vb = cdt.insert(triangulation_Point(10,350));
-  // cdt.insert_constraint(va,vb);
-  // polygon_edges.push_back(kernel_Point_2(10,350));
+//   va = vb;
+//   vb = cdt.insert(triangulation_Point(10,350));
+//   cdt.insert_constraint(va,vb);
+//   polygon_edges.push_back(kernel_Point_2(10,350));
 
-  // va = vb;
-  // vb = cdt.insert(triangulation_Point(10,10));
-  // cdt.insert_constraint(va,vb);
+//   va = vb;
+//   vb = cdt.insert(triangulation_Point(10,10));
+//   cdt.insert_constraint(va,vb);
 
 // ---------------------------------------------------
-
-
 
   Vertex_handle va = cdt.insert(triangulation_Point(391,374));
   Vertex_handle vb = cdt.insert(triangulation_Point(240,431));
@@ -414,8 +305,86 @@ void make_triangulation(CDT& cdt, std::vector<kernel_Point_2>& polygon_edges){
 
 }
 
+double latitudeDisplacement (double initialLatitude, double meters){
+
+    double newLatitude = 0.0;
+    newLatitude = initialLatitude + (((meters/1000) / r_earth) * (180/PI));
+    return newLatitude;
+
+}
+
+double longitudeDisplacement(double initialLongitude, double displacedLatitude, double meters){
+
+    double newLongitude = 0.0;
+    newLongitude = initialLongitude + ((((meters/1000) / r_earth) * (180/PI)) / cos(displacedLatitude * (PI/180)));
+    return newLongitude;
+
+}
+
 int main( int argc, char** argv )
 {
+    // einai lathos. den mporeis na ksereis to simeio 0.0.
+    // ksereis mono ta simeia toy sximatos
+    // i arxiki topothesia toy 0.0
+    double initialLatitude = 12.1;
+    double initialLongitude = 12.1;
+
+    // placeholders
+    int which_agent = 1;
+    int numberOfStep = 1;
+
+    // ta, x kai y tou centroid
+    double pointY = 12.2;
+    double pointX = 14.4;
+
+    // ta x,y kathe waypoint
+    double newLatitude = latitudeDisplacement(initialLatitude, pointY);
+    double newLongitude = longitudeDisplacement(initialLongitude, newLatitude, pointX);
+
+    // kai kanta oti thes
+    //---------------FILES----------------pane prin apo toys ipologismous//
+
+    std::stringstream coordinates_filename;
+    std::stringstream flightplan_filename;
+
+    coordinates_filename << currentDateTime() << ":forAgent:" << which_agent << ":coordinates" << ".txt";
+    flightplan_filename << currentDateTime() << ":forAgent:" << which_agent << ":wpPlan" << ".txt";
+    const std::string& tmp1 = coordinates_filename.str();
+    const std::string& tmp2 = flightplan_filename.str();
+    // see http://stackoverflow.com/questions/1374468/stringstream-string-and-char-conversion-confusion
+    const char* cstr1 = tmp1.c_str();
+    const char* cstr2 = tmp2.c_str();
+    std::ofstream fPlanDataCoordinates(cstr1);
+    std::ofstream fWPPlan(cstr2);
+
+
+    fPlanDataCoordinates << "'UAVID', 'WptID', 'Lat', 'Lon',"<< std::endl; // only at first line
+    fPlanDataCoordinates << which_agent << ", ";
+    fPlanDataCoordinates << numberOfStep /* or id of cell.. */ << ", ";
+    fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLatitude << ", ";
+    fPlanDataCoordinates << std::fixed << std::setprecision(7) << newLongitude << std::endl;
+
+    // the following is the initial take off position - this is the initial 0.0 of the agent but for
+    // now not the initial position (the one where the triangulation is counted).
+    // it's the 0.0. it needs to fly to it's initial position
+    fWPPlan << "0\t1\t0\t16\t0\t0\t0\t0\t" << std::fixed << std::setprecision(7) << initialLatitude << "\t"
+                << std::fixed <<  std::setprecision(7) << initialLongitude << "\t585\t1" << std::endl;
+
+    // this is the initial (where the agent should start...):
+    fWPPlan << "1\t0\t3\t22\t15\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
+            << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
+    // this is for every other spot:
+    fWPPlan << numberOfStep << "\t0\t3\t16\t0\t0\t0\t0\t" << std::fixed << std::setprecision(7) << newLatitude << "\t"
+            << std::fixed << std::setprecision(7) << newLongitude << "\t100\t1" << std::endl;
+    // and this for landing:
+    fWPPlan << numberOfStep << "\t0\t3\t21\t480\t0\t0\t25\t" << std::fixed << std::setprecision(7) << initialLatitude << "\t"
+            << std::fixed << std::setprecision(7) << initialLongitude  << "\t580\t1" << std::endl;
+
+    // otan ola exoun mpei
+    fPlanDataCoordinates.close();
+    fWPPlan.close();
+
+
   // --------- CGAL CODE ----------------------
   // create a vector of kernel_points that are the edges of the polygon
   std::vector<kernel_Point_2> polygon_edges;
@@ -429,21 +398,21 @@ int main( int argc, char** argv )
   // insert a single point inside the polygon to be triangulated.
   // By doing so we actually define which domain we consider as of interest.
   cdt.insert(triangulation_Point(198, 198));
-  std::cout << "Number of vertices before meshing and refining: " << cdt.number_of_vertices() << std::endl;
-  
-  std::cout << "Meshing the triangulation with default criterias..."
+  std::cout << "Number of vertices before meshing and refining: " << cdt.number_of_vertices() << std::endl;  
+  std::cout << "Meshing the triangulation with default criteria..."
             << std::endl;
   Mesher mesher(cdt);
   mesher.refine_mesh();
   std::cout << "Number of vertices after meshing: " << cdt.number_of_vertices() << std::endl;
-  std::cout << "Meshing with new criterias..." << std::endl;
+  std::cout << "Meshing again with new criteria..." << std::endl;
   
   // 0.125 is the default shape bound. It corresponds to abound 20.6 degree.
-  // 0.5 is the upper bound on the length of the longuest edge.
+  // 0.5 is the upper bound on the length of the longest edge.
   // See reference manual for Delaunay_mesh_size_traits_2<K>.
   mesher.set_criteria(Criteria(0.125, 20)); // was 0.5
   mesher.refine_mesh();
-  std::cout << "Number of vertices after meshing and refining with new criteria: " << cdt.number_of_vertices() << std::endl;
+  std::cout << "Number of vertices after meshing and refining with new criteria: "
+            << cdt.number_of_vertices() << std::endl;
 
   //Adding a seed, inside the hole that was defined in the creation of the triangulation constrains.
   std::list<triangulation_Point> list_of_seeds;
@@ -451,8 +420,6 @@ int main( int argc, char** argv )
   std::cout << "Refining and meshing the domain with a seed defining the hole..." << std::endl;
   CGAL::refine_Delaunay_mesh_2(cdt, list_of_seeds.begin(), list_of_seeds.end(), Criteria());
   std::cout << "Number of vertices after meshing and refining with Delaunay triangulation: " << cdt.number_of_vertices() << std::endl;
-
-  //CDT::Finite_faces_iterator faces_iterator = cdt.faces_begin();
 
   // JUMP COST ALGORITHM ------------------------------------------
   bool neverInside = false;
@@ -472,12 +439,13 @@ int main( int argc, char** argv )
   // int zth = 68;
   int agent_id = 1;
   int jumps_ad = 1;
+  // define how many agents we have...
+  int agents_count=3;
   int initialize_iterator = 0;
 
   geometry_msgs::Point centerOfField;
   centerOfField.x = 180.0;
   centerOfField.y = 180.0;
-
 
   for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin(); faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
 
@@ -508,8 +476,9 @@ int main( int argc, char** argv )
       faces_iterator->info().agent_id = -1;
     }
   }
-  std::cout << "Triangles : " << initialize_iterator << std::endl;
+  std::cout << "Total cells in triangulation : " << initialize_iterator << std::endl;
 
+  std::cout << "-----Beginning jump cost------" << std::endl;
   do {
     jumpsIterator++; // including non domain triangles
     
@@ -532,18 +501,9 @@ int main( int argc, char** argv )
           if ((face->neighbor(i)->is_in_domain()) && !(face->neighbor(i)->info().has_number())) {
 
 			  // assign jumpers id. we do this in order to see which growing function has managed to reach the end or target.
-			  // if (face->info().depth == 1){
-			  // 	for (int j=0; j<3; j++){face->neighbor(j)->info().jumps_agent_id = j+1;}
-			  // 	//face->neighbor(i)->info().jumps_agent_id = i;
-			  // } else {
-			  // 	for (int j=0; j<3; j++){face->neighbor(j)->info().jumps_agent_id = face->info().jumps_agent_id;}
-			  // 	//face->neighbor(i)->info().jumps_agent_id = face->info().jumps_agent_id;
-			  // }
            	if (face->info().depth != 1){
-           	  //for (int j=0; j<3; j++){face->neighbor(j)->info().jumps_agent_id = face->info().jumps_agent_id;}
 			   face->neighbor(i)->info().jumps_agent_id = face->info().jumps_agent_id;
-			}
-          	//face->neighbor(i)->info().jumps_agent_id = face->info().jumps_agent_id;
+            }
 
             face->neighbor(i)->info().depth = jumpsIterator;
             // increase depth if one of the neighbors are not in domain. this is done to avoid borders (or not..)
@@ -551,10 +511,17 @@ int main( int argc, char** argv )
             // agent id propagation
             face->neighbor(i)->info().agent_id = face->info().agent_id;
           }
-          // if a neighbor is not in the domain then give it, and it's neighbors, great depth in order for
+          // if a neighbor is not in the domain then give it, (and maybe it's neighbors), great depth in order for
           // the uav to visit the borders last, or not at all
-          else if (!(face->neighbor(i)->is_in_domain()) ){
-            face->info().depth = 300; 
+          //------//
+          // for now and for coverage purposes, each border cell (to non domain but agent seperating also)
+          // is getting a great depth
+          else if (!(face->neighbor(i)->is_in_domain())){
+
+            // all borders have a great coverage depth
+              face->info().coverage_depth = 999;
+              face->info().cover_depth = true;
+            //face->info().depth = 300;
             // for (int j=0; j<3; j++){
             //   face->neighbor(j)->info().depth = 300;
             //   face->neighbor(j)->info().numbered = true;
@@ -569,9 +536,49 @@ int main( int argc, char** argv )
     }
    } while (neverInside == false);
 
-  std::cout << "Ended. Maximum Jumps: " << jumpsIterator << " . Repetitions: " << repeatIterator << "." << std::endl;
+  std::cout << "Ended. Maximum Jumps: " << jumpsIterator << " . While loop repetitions: " << repeatIterator << "." << std::endl;
 
   // -------- END OF JUMP COST ALGORITHM -------------------//
+  // -------- BEGIN OF COMPLETE COVERAGE (BORDER-TO-INNER) COST ALGORITHM -------------------//
+  std::cout << "----Beginning complete coverage algorithm----" << std::endl;
+
+    // go through all triangles to give border depth to the borders between agents
+    for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin();
+    faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
+        // initialize again the path visited attribute
+        for (int i=0;i<3;i++){
+            if ( (faces_iterator->neighbor(i)->info().agent_id != faces_iterator->info().agent_id) ){
+              faces_iterator->info().coverage_depth = 999;
+              faces_iterator->info().cover_depth = true;
+            }
+        }
+    }
+
+    int so_many = 0;
+    int da_coverage_depth = 999;
+    bool never_ever_again = true;
+    do {
+        da_coverage_depth = da_coverage_depth - 10;
+        never_ever_again = true;
+        for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin();
+            faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
+
+            if((faces_iterator->info().has_coverage_depth()) && (faces_iterator->info().coverage_depth > da_coverage_depth) ){
+                for (int i=0;i<3;i++){
+                    if (!faces_iterator->neighbor(i)->info().has_coverage_depth()){
+                        faces_iterator->neighbor(i)->info().coverage_depth = da_coverage_depth;
+                        faces_iterator->neighbor(i)->info().cover_depth = true;
+                        never_ever_again = false;
+                        so_many++;
+                    }
+                }
+            }
+
+        }
+    } while (!never_ever_again);
+    std::cout << "Total internal cells: " << so_many << std::endl;
+
+  // -------- END OF COMPLETE COVERAGE (BORDER-TO-INNER) COST ALGORITHM -------------------//
   // endOf: --------- CGAL CODE ----------------------
 
   ros::init(argc, argv, "polygon_triangulation");
@@ -655,7 +662,6 @@ int main( int argc, char** argv )
 
     geometry_msgs::Point new_point = cgal_point_to_ros_geometry_point(*iterator);    
     edges.points.push_back(new_point);
-
     polygon.points.push_back(point_to_point_32(cgal_point_to_ros_geometry_point(*iterator)));  
   }
 
@@ -677,6 +683,7 @@ int main( int argc, char** argv )
   int target_face_number = 595;
   int target_jumps_agent_id = 0;
   
+  // finding the jump agent id for the target
   for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin(); faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
 
     CDT::Face_handle face = faces_iterator;
@@ -687,15 +694,15 @@ int main( int argc, char** argv )
     }
   }
 
+  // applying either shortest path to target or coverage algorithms for path production
   for(CDT::Finite_faces_iterator faces_iterator = cdt.finite_faces_begin(); faces_iterator != cdt.finite_faces_end(); ++faces_iterator){
 
     CDT::Face_handle face = faces_iterator;
     
     if ((face->is_in_domain()) && (face->info().agent_id == for_agent) && (face->info().depth == 1)){
-      //path.poses.push_back(build_pose_stamped(center));
-      face->info().path_visited = true;
-      //complete_path_coverage(cdt, path, face, for_agent);
-      shortest_path_coverage(cdt, path, face, for_agent, target_face_number);
+      //TODO: introduce also not over holes in complete coverage-shortest distance
+      complete_path_coverage(cdt, path, face, for_agent);
+      //shortest_path_coverage(cdt, path, face, for_agent, target_face_number);
       break;
     }
   }
@@ -719,61 +726,37 @@ int main( int argc, char** argv )
 
       // add these edges to the triangulation mesh array. This collection creates a triangle for every three points inserted. 
       // add also the z for z elevation       
-      int face_depth = face->info().depth; 
+
+      int face_depth = face->info().depth;
+      //int face_depth = face->info().coverage_depth;
       float z = -face_depth;
       int the_agent = face->info().agent_id;
 
-      triangulation_mesh.points.push_back(cgal_triangulation_point_to_ros_geometry_point(point1, z));  
+      // from utilities.cpp
+      triangulation_mesh.points.push_back(cgal_triangulation_point_to_ros_geometry_point(point1, z));
       triangulation_mesh.points.push_back(cgal_triangulation_point_to_ros_geometry_point(point2, z));
       triangulation_mesh.points.push_back(cgal_triangulation_point_to_ros_geometry_point(point3, z));
 
-      // calculate the center of each triangle
-      // geometry_msgs::Point center;
-      // center.x =  ( (point1.x() + point2.x() + point3.x()) / 3);
-      // center.y =  ( (point1.y() + point2.y() + point3.y()) / 3);
-      // center.z = 0;
-  
-      //face_points_to_center(point1, point2, point3);
       // adding the center of every triangle
       center_points.points.push_back(face_points_to_center(point1, point2, point3));
-      
-      // add the center to the path. remember to build the path by asking if it's in the same agent_id
-      // and to follow the lesser depth first
-      if (the_agent == 1){
-        //path.poses.push_back(build_pose_stamped(center));
-      }
 
       std_msgs::ColorRGBA triangle_color;
-      triangle_color.r = 0.0f + (face_depth/140.0);
-      triangle_color.g = 0.0f + (the_agent/10.0);// + (face->info().depth/45.0);//color_iterator*2.50/100;
-      triangle_color.b = 0.0f + (face_depth/75.0);//color_iterator*8.0/100;
-      triangle_color.a = 1.0f;
+      triangle_color.r = 0.0f + (face_depth/300.0);
+      triangle_color.b = 0.0f + (the_agent/10.0);// + (face->info().depth/45.0);//color_iterator*2.50/100;
+      triangle_color.g = 0.0f;// + (face_depth/75.0);//color_iterator*8.0/100;
+      triangle_color.a = 1.0f;// + (face_depth/900.0);
 
-      if ((face_depth == 1) || (face_depth == (jumpsIterator - 1)) ){ // || (face->info().id == 695)) {
+      // also: if (face->info().jumps_agent_id == target_jumps_agent_id)
+      if ((face->info().depth == 1) || (face_depth == (jumpsIterator - 1)) ){ // || (face->info().id == 695)) {
         triangle_color.r = 1.0f;// + (face->info().depth/30.0);
         triangle_color.g = 1.0f;// + (face->info().depth/50.0);//color_iterator*2.50/100;
         triangle_color.b = 1.0f;// + (face->info().depth/60.0);//color_iterator*8.0/100;
         triangle_color.a = 1.0f;
       }
-      // turn red the triangles of the jump agents who managed to reach the end/target 
-      // in that way, you color the tree which managed to find a solution.
-      // in a multiple step solution, we assign "agents" to find a path by a growing region algorithm.
-      // in a case a path is found, then we color the area that this specific agent has scanned.
-      // in path planning, this reduces the area of the point cloud in which the path is going to be planned.
-      // more formaly, we find a subset of the original set of points. SεT
-      // if then we draw a path, by choosing the next step by growing our depth counter by 1, staying in the same set,
-      // and each of the steps is the one closer to the final target, then we assume that the solution is always there.
-      if (face->info().jumps_agent_id == target_jumps_agent_id) {
-      	triangle_color.r = 1.0f;// + (face->info().depth/30.0);
-        triangle_color.g = 0.0f;// + (face->info().depth/50.0);//color_iterator*2.50/100;
-        triangle_color.b = 0.0f;// + (face->info().depth/60.0);//color_iterator*8.0/100;
-        triangle_color.a = 1.0f;	
-      }
 
       triangulation_mesh.colors.push_back(triangle_color);
      // triangulation_mesh_pub.publish(triangulation_mesh);
     }
-     //d.sleep();
   }
 
   // refresh/publishing rate in Hz (times per second)
