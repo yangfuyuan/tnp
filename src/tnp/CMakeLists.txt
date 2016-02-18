@@ -103,7 +103,7 @@ find_package(CGAL REQUIRED COMPONENTS Core)
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
+  INCLUDE_DIRS include
 #  LIBRARIES tnp
 #  CATKIN_DEPENDS roscpp visualization_msgs
 #  DEPENDS system_lib
@@ -118,6 +118,7 @@ catkin_package(
 # include_directories(include)
 include_directories(
   ${catkin_INCLUDE_DIRS}
+  include/${PROJECT_NAME}/
 )
 
 ## Declare a C++ library
@@ -134,13 +135,14 @@ include_directories(
 # add_executable(tnp_node src/tnp_node.cpp)
 
 add_executable(polygon_partition src/polygon_partition_cgal_rviz.cpp)
-add_executable(polygon_triangulation src/polygon_triangulation_cgal.cpp)
+add_executable(polygon_triangulation src/polygon_triangulation_cgal.cpp src/utilities.cpp)
 add_executable(partition_then_triangulation src/partition_seperate_triangulation.cpp)
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
 # add_dependencies(tnp_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 # add_dependencies(cgal_rviz ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS} ${CGAL_EXPORTED_TARGETS})
+add_dependencies(polygon_triangulation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
 # target_link_libraries(tnp_node
